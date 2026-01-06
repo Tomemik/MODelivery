@@ -65,10 +65,6 @@ with st.spinner("Ładowanie mapy Krakowa..."):
 
 
 def get_surface_score(edge_data):
-    """
-    Ocenia nawierzchnię w skali 1-10.
-    Jeśli brak tagu 'surface', wnioskuje na podstawie typu drogi ('highway').
-    """
     surface = edge_data.get('surface')
     highway = edge_data.get('highway')
 
@@ -76,11 +72,8 @@ def get_surface_score(edge_data):
     if isinstance(highway, list): highway = highway[0]
 
     scores = {
-        # Bardzo dobre (niskie opory)
         'asphalt': 10, 'concrete': 9, 'paved': 9, 'metal': 9,
-        # Średnie
         'paving_stones': 7, 'sett': 5, 'concrete:plates': 6,
-        # Złe (duże opory/wstrząsy)
         'cobblestone': 3, 'unpaved': 3, 'gravel': 2,
         'dirt': 2, 'grass': 1, 'sand': 1, 'earth': 2,
         'unknown': 5
@@ -102,10 +95,6 @@ def get_surface_score(edge_data):
 
 
 def calculate_battery_consumption(length_m, current_total_load, surface_score):
-    """
-    Oblicza zużycie baterii [Wh].
-    current_total_load: waga robota + suma wszystkich niedostarczonych jeszcze paczek.
-    """
     base_robot_weight = 20.0
     total_mass = base_robot_weight + current_total_load
 
@@ -219,13 +208,12 @@ if output['last_clicked']:
         })
         st.rerun()
 
-# --- 6. LOGIKA OBLICZENIOWA ---
 if st.button("🚀 Oblicz Trasę Wielokryterialną") and len(st.session_state['stops']) > 1:
 
     stops = st.session_state['stops']
     full_route_geometry = []
     route_details = []
-    debug_data = []  # <--- NOWA LISTA NA DANE DO ANALIZY
+    debug_data = []
 
     current_payload = sum(s['drop_weight'] for s in stops)
 
@@ -245,7 +233,6 @@ if st.button("🚀 Oblicz Trasę Wielokryterialną") and len(st.session_state['s
             node_a = ox.nearest_nodes(G, start_pt['lon'], start_pt['lat'])
             node_b = ox.nearest_nodes(G, end_pt['lon'], end_pt['lat'])
 
-            # Zwiększone K dla lepszych wyników
             K = 40
             k_paths = list(islice(nx.shortest_simple_paths(G, node_a, node_b, weight='length'), K))
 
@@ -271,7 +258,6 @@ if st.button("🚀 Oblicz Trasę Wielokryterialną") and len(st.session_state['s
 
             df_seg = pd.DataFrame(segment_candidates)
 
-            # Normalizacja i TOPSIS
             weights_dict = {'length': w_len, 'battery': w_bat, 'surface_quality': w_surf}
             w_s = sum(weights_dict.values()) or 1
             weights_dict = {k: v / w_s for k, v in weights_dict.items()}
@@ -282,8 +268,6 @@ if st.button("🚀 Oblicz Trasę Wielokryterialną") and len(st.session_state['s
             best_idx = scores.idxmax()
             best_variant = df_seg.iloc[best_idx]
 
-            # --- ZBIERANIE DANYCH DEBUGOWYCH (ZAMIAST WYŚWIETLANIA) ---
-            # Zapisujemy kopię danych dla tego odcinka
             debug_info = {
                 'segment_idx': i + 1,
                 'start': start_pt['type'],
@@ -292,7 +276,6 @@ if st.button("🚀 Oblicz Trasę Wielokryterialną") and len(st.session_state['s
                 'best_id': best_variant['id']
             }
             debug_data.append(debug_info)
-            # ----------------------------------------------------------
 
             full_route_geometry.extend(best_variant['path'])
             route_details.append({
@@ -308,11 +291,10 @@ if st.button("🚀 Oblicz Trasę Wielokryterialną") and len(st.session_state['s
 
             progress_bar.progress((i + 1) / total_segments)
 
-        # Zapis wszystkiego do sesji
         st.session_state['calculation_results'] = {
             'details': route_details,
             'geometry': full_route_geometry,
-            'debug_data': debug_data  # <--- ZAPISUJEMY DEBUG DATA
+            'debug_data': debug_data
         }
 
     except nx.NetworkXNoPath:
@@ -325,11 +307,9 @@ if 'calculation_results' in st.session_state:
 
     st.success("Trasa wyznaczona pomyślnie!")
 
-    # Tabela
     st.subheader("📋 Szczegóły Odcinków")
     st.dataframe(pd.DataFrame(results['details']))
 
-    # Legenda kolorów
     st.markdown("""
     **Legenda nawierzchni:**
     <span style='color:#2ecc71'>■</span> Asfalt/Beton (Super) &nbsp;|&nbsp; 
@@ -340,13 +320,12 @@ if 'calculation_results' in st.session_state:
 
     st.subheader("🗺️ Mapa Wynikowa z Nawierzchniami")
 
-    # Ustalenie środka mapy
     if results['geometry']:
         first_node = results['geometry'][0]
         center_lat_res = G.nodes[first_node]['y']
         center_lon_res = G.nodes[first_node]['x']
     else:
-        center_lat_res, center_lon_res = 50.06, 19.94  # Fallback
+        center_lat_res, center_lon_res = 50.06, 19.94
 
     m_final = folium.Map(location=[center_lat_res, center_lon_res], zoom_start=14)
 
@@ -354,39 +333,31 @@ if 'calculation_results' in st.session_state:
 
     for u, v in zip(full_path_nodes[:-1], full_path_nodes[1:]):
 
-        # 1. Pomiń pętle (ten sam węzeł)
         if u == v: continue
 
-        # 2. Pobierz dane
         edge_data = G.get_edge_data(u, v)
         if edge_data is None: continue
 
-        # 3. Pobierz nawierzchnię
-        surf = edge_data.get('surface')  # Może być None
-        highway = edge_data.get('highway')  # Typ drogi, np. 'service', 'residential'
+        surf = edge_data.get('surface')
+        highway = edge_data.get('highway')
 
-        # Obsługa list (czasami OSM zwraca ['asphalt', 'concrete'])
         if isinstance(surf, list): surf = surf[0]
         if isinstance(highway, list): highway = highway[0]
 
-        # --- LOGIKA NAPRAWČZA (HEURYSTYKA) ---
-        # Jeśli nie ma info o nawierzchni, zgadujemy na podstawie typu drogi
         if surf is None:
             if highway in ['primary', 'secondary', 'tertiary', 'residential', 'living_street']:
-                surf = 'asphalt'  # Zakładamy, że ulice są asfaltowe
+                surf = 'asphalt'
             elif highway in ['cycleway', 'footway', 'path', 'pedestrian']:
-                surf = 'paved'  # Zakładamy, że chodniki są utwardzone
+                surf = 'paved'
             elif highway == 'service':
-                surf = 'concrete'  # Drogi serwisowe często są betonowe/kostka
+                surf = 'concrete'
             elif highway == 'track':
-                surf = 'dirt'  # Drogi polne
+                surf = 'dirt'
             else:
                 surf = 'unknown'
 
-        # 4. Dobierz kolor
-        color = SURFACE_COLORS.get(surf, '#7f8c8d')  # Domyślnie szary
+        color = SURFACE_COLORS.get(surf, '#7f8c8d')
 
-        # 5. Rysuj
         coords = [(G.nodes[u]['y'], G.nodes[u]['x']), (G.nodes[v]['y'], G.nodes[v]['x'])]
 
         folium.PolyLine(
@@ -397,7 +368,6 @@ if 'calculation_results' in st.session_state:
             tooltip=f"Typ: {highway} | Nawierzchnia: {surf}"
         ).add_to(m_final)
 
-    # --- RYSOWANIE PUNKTÓW (MARKERÓW) ---
     for i, stop in enumerate(st.session_state['stops']):
         if i == 0:
             color, icon_name = "green", "play"
@@ -414,7 +384,6 @@ if 'calculation_results' in st.session_state:
 
     st_folium(m_final, width=1000, height=500, key="final_map_display")
 
-    # --- NOWA SEKCJA: ANALIZA SZCZEGÓŁOWA (DEBUG) ---
     st.divider()
     st.header("🔍 Analiza Decyzyjna TOPSIS (Krok po kroku)")
 
@@ -426,7 +395,6 @@ if 'calculation_results' in st.session_state:
             df = info['df']
             best_id = info['best_id']
 
-            # Statystyki różnorodności
             diff_surf = df['surface_quality'].max() - df['surface_quality'].min()
             diff_len = df['length'].max() - df['length'].min()
 
